@@ -10,7 +10,7 @@ challs = {}
 uid = pwd.getpwnam("cappit").pw_uid
 gid = grp.getgrnam("cappit").gr_gid
 
-get_assigned_port = lambda name : challs[name]
+get_assigned_port = lambda name : challs[name]["port"]
 get_port = lambda c : c.ports['31000/tcp'][0]['HostPort']
 is_alive = lambda c : c.status == "running"
 
@@ -23,7 +23,7 @@ def is_built(client,name):
 
 def is_assigned(name):
     if name in challs.keys():
-        return challs[name]
+        return True
     else:
         return False
 
@@ -67,7 +67,7 @@ def load_json():
 def find_avail_port():
     global challs
 
-    ports = sorted([int(challs[name]) for name in challs.keys()])
+    ports = sorted([int(challs[name]["port"]) for name in challs.keys()])
 
     for port in range(31000,32000):
         if port not in ports:
@@ -76,21 +76,23 @@ def find_avail_port():
     return str(port)
 
 def list_chall(client,filters=None,quiet=False): 
-    print("[Challenge list]") 
-    print("{:^5}{:^25}{:^5}{:^10}".format("idx","name","port","status"))
-    
     containers=[]
     for container in client.containers.list(all=True,filters=filters):
         if container.name.startswith('cappit'):
             containers.append(container)
 
     if not quiet:
+        print("[Challenge list]") 
+        print("{:^5}{:^25}{:^5}{:^10}".format("idx","name","port","status"))
         containers = sorted(containers,key=lambda container : get_assigned_port(container.name[7:]))
         for idx,container in enumerate(containers):
             port = get_assigned_port(container.name[7:])
             name = container.name
             status = container.status
             print("{:^5}{:^25}{:^5}{:^10}".format(str(idx+1),name,port,status))
+        for name in challs.keys():
+            if challs[name]["manual"] == "true":
+                print("{:^5}{:^25}{:^5}".format("M",name,challs[name]["port"]))
         
     return containers
 
@@ -107,22 +109,32 @@ def run_chall(client):
     if is_assigned(name):
         port = get_assigned_port(name)
     else:
-        port = find_avail_port()
+        choice=input("Do you want to bind port manually?(y/n)")
+        if choice.lower() == "y":
+            port = input("port: ")
+        else:
+            port = find_avail_port()
 
     fpath = Path(".","dock_"+name)
 
     print("[1]Generate Dockerfile...")
     if fpath.exists() and fpath.is_dir():
         os.chdir(str(fpath))
-        if Path("flag").exists() and Path("bin").exists():
-            os.system("gendock {} {} {}".format(ver,name,port))
-            print("[+]Generate Dockerfile succeed!\n")
-        else:
-            print("[!]Some file missed (flag or bin)\n")
+        if not Path("flag").exists() or not Path("bin").exists():
+            print("[!]Some files missed (flag or bin).\n")
             os.chdir("..")
             return
+        choice = input("Do you want to generate Dockerfile manually?(y/n)")
+        if choice.lower() == 'y':
+            print("Input contents of Dockerfile after '>>'")
+            dock_cont=input(">>\n")
+            os.system("gendock -m {} {} {}".format(dock_cont,name,port))
+            print("[+]Generate Dockerfile succeed!\n")
+        else:
+            os.system("gendock {} {} {}".format(ver,name,port))
+            print("[+]Generate Dockerfile succeed!\n")
     else:
-        print("[!]Target directury/file not exist\n")
+        print("[!]Target directury not exists\n")
         return
 
     print("[2]Build Dockerfile")
@@ -145,7 +157,7 @@ def run_chall(client):
 
     os.chdir("..")
     set_perm_recursive(str(fpath))
-    challs.update({name:port})
+    challs.update({name:{"port":port,"manual":"false"}})
     with open("challs.json","w") as f:
         json.dump(challs,f)
         f.close()
@@ -165,6 +177,18 @@ def restart_chall(client):
     subprocess.call("dock_{}/run.sh".format(name),shell=True)    
 
     print("[+]Restart cappit_{} complete".format(name))
+
+def manually_bind():
+    print("[Port binding]")
+    name=input("name :")
+    port=input("port :")
+
+    challs.update({name:{"port":port,"manual":"true"}})
+    with open("challs.json","w") as f:
+        json.dump(challs,f)
+        f.close()
+
+    print("[+]Manual port binding succeed")
 
 def stop_chall(client):
     print("[Stop challenge]")
@@ -240,10 +264,11 @@ def menu():
         print("[1]list challenges")
         print("[2]run challenge")
         print("[3]restart challenge")
-        print("[4]stop challenge")
-        print("[5]remove challenge")
-        print("[6]clear all")
-        print("[7]quit")
+        print("[4]bind port-challege manually")
+        print("[5]stop challenge")
+        print("[6]remove challenge")
+        print("[7]clear all")
+        print("[8]quit")
         choice = input("> ")
         print()
 
@@ -254,12 +279,14 @@ def menu():
         elif choice == str(3):
             restart_chall(client)
         elif choice == str(4):
-            stop_chall(client)
+            manually_bind()
         elif choice == str(5):
-            remove_chall(client)
+            stop_chall(client)
         elif choice == str(6):
-            clear_all(client)
+            remove_chall(client)
         elif choice == str(7):
+            clear_all(client)
+        elif choice == str(8):
             quit()
         else:
             print("[!]Wrong choice\n")
